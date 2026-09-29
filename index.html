@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pop Matematika Touchless - Kelas 2 SD</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a1a2e;
+            font-family: 'Comic Sans MS', 'Chalkboard SE', sans-serif;
+        }
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        /* Canvas Video & Game */
+        #webcam-video {
+            display: none;
+        }
+        #game-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+        }
+        /* UI Display */
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 20;
+            pointer-events: none;
+        }
+        .question-card {
+            background: #FFD700;
+            border: 6px solid #FF8C00;
+            border-radius: 20px;
+            padding: 12px 35px;
+            font-size: 44px;
+            font-weight: bold;
+            color: #222;
+            box-shadow: 0 8px 0 #B8860B;
+        }
+        .score-card {
+            margin-top: 10px;
+            background: #222;
+            color: #00FFCC;
+            border: 3px solid #00FFCC;
+            border-radius: 12px;
+            padding: 6px 20px;
+            font-size: 22px;
+            font-weight: bold;
+        }
+        /* Modal Start Screen */
+        #start-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            text-align: center;
+            padding: 20px;
+        }
+        .btn-start {
+            margin-top: 25px;
+            padding: 18px 45px;
+            font-size: 28px;
+            font-weight: bold;
+            color: white;
+            background: #28a745;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 6px 0 #1e7e34;
+            transition: transform 0.1s;
+        }
+        .btn-start:active {
+            transform: translateY(4px);
+            box-shadow: 0 2px 0 #1e7e34;
+        }
+        .status-text {
+            margin-top: 15px;
+            font-size: 18px;
+            color: #ffc107;
+        }
+    </style>
+
+    <!-- Library MediaPipe CDN (Versi Stabil) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="game-container">
+    <video id="webcam-video" playsinline></video>
+    <canvas id="game-canvas"></canvas>
+
+    <div id="ui-layer">
+        <div class="question-card" id="question-text">Matematika Smartboard</div>
+        <div class="score-card">Skor: <span id="score-text">0</span></div>
+    </div>
+
+    <div id="start-overlay">
+        <h1>🎈 POP MATEMATIKA TOUCHLESS 🎈</h1>
+        <p style="margin-top: 15px; font-size: 20px; max-width: 600px;">
+            Arahkan jari tangan ke balon tanpa menyentuh layar! Tahan telunjuk di atas balon jawaban yang benar hingga meletus.
+        </p>
+        <button class="btn-start" id="start-btn">MULAI GAME</button>
+        <div class="status-text" id="status-display">Menunggu izin kamera...</div>
+    </div>
+</div>
+
+<script>
+// --- AUDIO SYNTHESIZER (Tanpa File Eksternal) ---
+class SoundManager {
+    constructor() {
+        this.ctx = null;
+    }
+    init() {
+        if (!this.ctx) {
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+    }
+    playPop() {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(400, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(800, this.ctx.currentTime + 0.08);
+        gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.08);
+    }
+    playWrong() {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(180, this.ctx.currentTime);
+        osc.frequency.linearRampToValueAtTime(110, this.ctx.currentTime + 0.2);
+        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.2);
+    }
+}
+
+const sounds = new SoundManager();
+
+// --- STATE SISTEM & ELEMEN ---
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+const videoElement = document.getElementById('webcam-video');
+const questionText = document.getElementById('question-text');
+const scoreText = document.getElementById('score-text');
+const startBtn = document.getElementById('start-btn');
+const startOverlay = document.getElementById('start-overlay');
+const statusDisplay = document.getElementById('status-display');
+
+let canvasWidth = window.innerWidth;
+let canvasHeight = window.innerHeight;
+let score = 0;
+let currentQuestion = null;
+let balloons = [];
+let handCursors = [];
+let isCameraActive = false;
+let particles = [];
+
+// Penyesuaian Ukuran Layar
+function resizeCanvas() {
+    canvasWidth = canvas.width = window.innerWidth;
+    canvasHeight = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// --- LOGIKA MATEMATIKA KELAS 2 SD ---
+function generateQuestion() {
+    const types = ['add', 'sub', 'mul'];
+    const selectedType = types[Math.floor(Math.random() * types.length)];
+    let num1, num2, answer, text;
+
+    if (selectedType === 'add') {
+        num1 = Math.floor(Math.random() * 35) + 5;
+        num2 = Math.floor(Math.random() * 35) + 5;
+        answer = num1 + num2;
+        text = `${num1} + ${num2} = ?`;
+    } else if (selectedType === 'sub') {
+        num1 = Math.floor(Math.random() * 40) + 10;
+        num2 = Math.floor(Math.random() * num1);
+        answer = num1 - num2;
+        text = `${num1} - ${num2} = ?`;
+    } else {
+        num1 = Math.floor(Math.random() * 5) + 1;
+        num2 = Math.floor(Math.random() * 5) + 1;
+        answer = num1 * num2;
+        text = `${num1} × ${num2} = ?`;
+    }
+
+    currentQuestion = { text, answer };
+    questionText.innerText = currentQuestion.text;
+    spawnBalloons(answer);
+}
+
+// --- EFEK PARTIKEL MELETUS ---
+class Particle {
+    constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.radius = Math.random() * 6 + 3;
+        this.vx = (Math.random() - 0.5) * 12;
+        this.vy = (Math.random() - 0.5) * 12;
+        this.life = 1.0;
+    }
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life -= 0.04;
+    }
+    draw(context) {
+        context.save();
+        context.globalAlpha = Math.max(0, this.life);
+        context.beginPath();
+        context.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        context.fillStyle = this.color;
+        context.fill();
+        context.restore();
+    }
+}
+
+function createBurst(x, y, color) {
+    for (let i = 0; i < 20; i++) {
+        particles.push(new Particle(x, y, color));
+    }
+}
+
+// --- BALON GAME ---
+class Balloon {
+    constructor(number, isCorrect) {
+        this.radius = Math.min(canvasWidth, canvasHeight) * 0.065; // Responsif terhadap resolusi Smartboard
+        this.x = Math.random() * (canvasWidth - this.radius * 3) + this.radius * 1.5;
+        this.y = canvasHeight + Math.random() * 200 + this.radius;
+        this.speed = Math.random() * 1.2 + 1.2;
+        this.number = number;
+        this.isCorrect = isCorrect;
+        this.color = `hsl(${Math.floor(Math.random() * 360)}, 85%, 55%)`;
+        this.hoverTimer = 0;
+        this.maxHoverTime = 25; // ~0.4 detik pada 60fps
+    }
+
+    respawn() {
+        this.y = canvasHeight + this.radius + Math.random() * 100;
+        this.x = Math.random() * (canvasWidth - this.radius * 3) + this.radius * 1.5;
+        this.hoverTimer = 0;
+    }
+
+    update() {
+        this.y -= this.speed;
+        if (this.y + this.radius < -50) {
+            this.respawn();
+        }
+    }
+
+    draw(context) {
+        // Tali Balon
+        context.beginPath();
+        context.moveTo(this.x, this.y + this.radius);
+        context.quadraticCurveTo(this.x - 5, this.y + this.radius + 20, this.x, this.y + this.radius + 40);
+        context.strokeStyle = "#FFFFFF";
+        context.lineWidth = 2;
+        context.stroke();
+
+        // Badan Balon
+        context.beginPath();
+        context.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        context.fillStyle = this.color;
+        context.fill();
+        context.lineWidth = 4;
+        context.strokeStyle = "#FFFFFF";
+        context.stroke();
+
+        // Kilatan Cahaya Balon (Efek 3D Sederhana)
+        context.beginPath();
+        context.arc(this.x - this.radius * 0.35, this.y - this.radius * 0.35, this.radius * 0.2, 0, Math.PI * 2);
+        context.fillStyle = "rgba(255, 255, 255, 0.4)";
+        context.fill();
+
+        // Teks Angka
+        context.fillStyle = "#FFFFFF";
+        context.font = `bold ${Math.floor(this.radius * 0.7)}px 'Comic Sans MS', sans-serif`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(this.number, this.x, this.y);
+
+        // Progress Ring Hovering
+        if (this.hoverTimer > 0) {
+            context.beginPath();
+            context.arc(this.x, this.y, this.radius + 10, -Math.PI / 2, (-Math.PI / 2) + (Math.PI * 2) * (this.hoverTimer / this.maxHoverTime));
+            context.strokeStyle = "#00FFCC";
+            context.lineWidth = 8;
+            context.stroke();
+        }
+    }
+}
+
+function spawnBalloons(correctAnswer) {
+    balloons = [];
+    let options = [correctAnswer];
+
+    while (options.length < 4) {
+        let fake = correctAnswer + (Math.floor(Math.random() * 12) - 6);
+        if (fake >= 0 && !options.includes(fake)) {
+            options.push(fake);
+        }
+    }
+    options.sort(() => Math.random() - 0.5);
+
+    options.forEach(num => {
+        balloons.push(new Balloon(num, num === correctAnswer));
+    });
+}
+
+// --- KALIBRASI PROYEKSI KOORDINAT TOUCHLESS ---
+function mapVideoToCanvas(normX, normY, vWidth, vHeight) {
+    // Mirrored secara horizontal
+    const mirroredX = 1 - normX;
+    
+    // Menghitung penyesuaian Aspect Ratio (Cover Scaling)
+    const videoRatio = vWidth / vHeight;
+    const canvasRatio = canvasWidth / canvasHeight;
+
+    let renderW, renderH, offsetX, offsetY;
+
+    if (canvasRatio > videoRatio) {
+        renderW = canvasWidth;
+        renderH = canvasWidth / videoRatio;
+        offsetX = 0;
+        offsetY = (canvasHeight - renderH) / 2;
+    } else {
+        renderH = canvasHeight;
+        renderW = canvasHeight * videoRatio;
+        offsetX = (canvasWidth - renderW) / 2;
+        offsetY = 0;
+    }
+
+    return {
+        x: mirroredX * renderW + offsetX,
+        y: normY * renderH + offsetY
+    };
+}
+
+// --- MEDIAPIPE HAND TRACKING SETUP ---
+const hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+    maxNumHands: 4, // Mendukung hingga 4 siswa sekaligus
+    modelComplexity: 1,
+    minDetectionConfidence: 0.55,
+    minTrackingConfidence: 0.55
+});
+
+hands.onResults((results) => {
+    handCursors = [];
+    const vWidth = videoElement.videoWidth || 640;
+    const vHeight = videoElement.videoHeight || 480;
+
+    if (results.multiHandLandmarks) {
+        for (const landmarks of results.multiHandLandmarks) {
+            // Landmark Index 8 = Ujung Jari Telunjuk
+            const indexTip = landmarks[8];
+            const coords = mapVideoToCanvas(indexTip.x, indexTip.y, vWidth, vHeight);
+            handCursors.push(coords);
+        }
+    }
+});
+
+// --- ENGINE UTAMA GAME (GAME LOOP) ---
+function gameLoop() {
+    // 1. Gambar Umpan Balik Kamera (Mirrored Background Dim)
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    if (isCameraActive && videoElement.readyState >= 2) {
+        ctx.save();
+        ctx.translate(canvasWidth, 0);
+        ctx.scale(-1, 1);
+        ctx.globalAlpha = 0.18; // Transparansi bayangan murid di background
+        ctx.drawImage(videoElement, 0, 0, canvasWidth, canvasHeight);
+        ctx.restore();
+    }
+
+    let needNewQuestion = false;
+
+    // 2. Update & Gambar Balon
+    balloons.forEach((balloon) => {
+        balloon.update();
+
+        // Cek interaksi dengan seluruh tangan murid di layar
+        let isHoveredByAnyHand = false;
+        for (let cursor of handCursors) {
+            let dist = Math.hypot(cursor.x - balloon.x, cursor.y - balloon.y);
+            if (dist < balloon.radius + 15) {
+                isHoveredByAnyHand = true;
+                break;
+            }
+        }
+
+        if (isHoveredByAnyHand) {
+            balloon.hoverTimer++;
+            if (balloon.hoverTimer >= balloon.maxHoverTime) {
+                if (balloon.isCorrect) {
+                    sounds.playPop();
+                    createBurst(balloon.x, balloon.y, balloon.color);
+                    score += 10;
+                    scoreText.innerText = score;
+                    needNewQuestion = true;
+                } else {
+                    sounds.playWrong();
+                    score = Math.max(0, score - 5);
+                    scoreText.innerText = score;
+                    balloon.respawn();
+                }
+            }
+        } else {
+            balloon.hoverTimer = Math.max(0, balloon.hoverTimer - 1.5); // Decay halus saat tangan terlepas
+        }
+
+        balloon.draw(ctx);
+    });
+
+    // 3. Update & Gambar Efek Partikel
+    particles.forEach((p, index) => {
+        p.update();
+        p.draw(ctx);
+        if (p.life <= 0) particles.splice(index, 1);
+    });
+
+    // Reset pertanyaan baru jika balon benar meletus
+    if (needNewQuestion) {
+        generateQuestion();
+    }
+
+    // 4. Gambar Kursor Tangan Pemain
+    handCursors.forEach((cursor) => {
+        ctx.beginPath();
+        ctx.arc(cursor.x, cursor.y, 22, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0, 255, 204, 0.7)";
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#FFFFFF";
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(cursor.x, cursor.y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fill();
+    });
+
+    requestAnimationFrame(gameLoop);
+}
+
+// --- CADANGAN (FALLBACK TOUCH/MOUSE) ---
+// Memastikan game tetap berjalan jika murid tidak sengaja menyentuh Smartboard
+canvas.addEventListener('pointerdown', (e) => {
+    handCursors = [{ x: e.clientX, y: e.clientY }];
+});
+canvas.addEventListener('pointermove', (e) => {
+    if (e.buttons > 0) {
+        handCursors = [{ x: e.clientX, y: e.clientY }];
+    }
+});
+canvas.addEventListener('pointerup', () => {
+    handCursors = [];
+});
+
+// --- INISIALISASI GAME & KAMERA ---
+startBtn.addEventListener('click', async () => {
+    sounds.init();
+    statusDisplay.innerText = "Mengakses Kamera...";
+    startBtn.disabled = true;
+
+    try {
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 1280,
+            height: 720
+        });
+
+        await cameraUtils.start();
+        isCameraActive = true;
+        startOverlay.style.display = 'none';
+        generateQuestion();
+        gameLoop();
+    } catch (err) {
+        console.warn("Kamera tidak dapat diakses, beralih ke Touch Mode:", err);
+        statusDisplay.innerText = "Mode Kamera Gagal. Game dapat dimainkan dengan Sentuhan Layar.";
+        setTimeout(() => {
+            startOverlay.style.display = 'none';
+            generateQuestion();
+            gameLoop();
+        }, 2000);
+    }
+});
+</script>
+</body>
+</html>
